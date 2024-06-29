@@ -7,13 +7,33 @@ Kubernetes Operator to duplicate ConfigMaps and Secrets across namespaces.
 ```
 kubectl apply -f https://raw.githubusercontent.com/maniraja1122/datareplicator/master/dist/install.yaml
 ```
+# Working 
+### Special annotations for operations
+Use this in the original Configmap or Secret that you want to duplicate in the given namespace or namespaces.
+```
+datareplicator/replicate-to: "namespace1,namespace2" [default: empty]
+```
+By default, creation of duplicate will be skipped if the destination namespace is not present. This annotation can overwrite this.
+```
+datareplicator/createnamespace: true [default: false]
+```
+Depicts that the operator will consider this object (Secret or ConfigMap) as already operated on.
+```
+datareplicator/replicated: true [default: false]
+```
+This annotation will be added in the duplicated object for reference.
+```
+datareplicator/sourcenamespace: “namespaceX”
+```
+
 
 ### Tested on
-[x] KinD Cluster
-[x] Minikube Cluster
-[x] Killercoda Playground (https://killercoda.com/playgrounds/scenario/kubernetes)
-[x] EKS Cluster
+- KinD Cluster
+- Minikube Cluster
+- [Killercoda Playground](https://killercoda.com/playgrounds/scenario/kubernetes)
+- EKS Cluster
 
+### Demo Run
 Sample Test:
 ```
 k create cm userdata --from-literal=name=zizu
@@ -46,3 +66,4 @@ namespace1              userdata                                               1
 namespace2              kube-root-ca.crt                                       1      98s
 namespace2              userdata                                               1      98s
 ```
+
