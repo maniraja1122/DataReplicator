@@ -7,3 +7,8 @@ Kubernetes Operator to duplicate ConfigMaps and Secrets across namespaces.
 ```
 kubectl apply -f https://raw.githubusercontent.com/maniraja1122/datareplicator/master/dist/install.yaml
 ```
+
+### Tested on
+[x] KinD Cluster
+[x] Minikube Cluster
+[x] Killercoda Playground ()
