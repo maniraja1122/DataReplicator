@@ -67,3 +67,7 @@ namespace2              kube-root-ca.crt                                       1
 namespace2              userdata                                               1      98s
 ```
 
+### Special Features
+- It observes the state of original object and modifies(data only)/deletes the duplicates if the original is modified(data only)/deleted.
+- It has the capability of maintaining tree structure like if object in namespace A makes copy in namespace B and namespace B makes copy in namespace C, so the changes on object in A, will be reflected on object in C.
+- As this is a replicator, so only make changes in the original object and duplicates should not be manually changed.

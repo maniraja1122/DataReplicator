@@ -31,6 +31,21 @@ import (
 )
 
 // Additional Functions
+func (r *ConfigMapReconciler) deleteConfigMap(ctx context.Context, name, namespace string) error {
+	// Define the ConfigMap to delete
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}
+	// Delete the ConfigMap
+	if err := r.Delete(ctx, configMap); err != nil {
+		return err // Handle the error appropriately
+	}
+
+	return nil
+}
 func (r *ConfigMapReconciler) NamespaceExists(ctx context.Context, namespaceName string) (bool, error) {
 	ns := &corev1.Namespace{}
 	err := r.Get(ctx, types.NamespacedName{Name: namespaceName}, ns)
@@ -48,6 +63,8 @@ type ConfigMapReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
+
+var finalizerMessage string = "datareplicator/watch"
 
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps/status,verbs=get;update;patch
@@ -75,14 +92,35 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		logger.Error(err, err.Error())
 		return ctrl.Result{}, err
 	}
+	// Checking Potential Deletion
+	if cm.DeletionTimestamp != nil {
+		duplicated_ns_list, list_exist := cm.Annotations["datareplicator/replicate-to"]
+		if list_exist {
+			ns_list := strings.Split(duplicated_ns_list, ",")
+			for _, n := range ns_list {
+				err := r.deleteConfigMap(ctx, cm.Name, n)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		}
+		cm.Finalizers = slices.DeleteFunc(cm.Finalizers, func(v string) bool {
+			if v == finalizerMessage {
+				return true
+			} else {
+				return false
+			}
+		})
+		err := r.Update(ctx, cm)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	// Duplicating....
 	labels := cm.Annotations
 	currentnamespace := cm.Namespace
 	val, exist := labels["datareplicator/replicate-to"]
 	if exist {
-		alreadyReplicated, replicatedExist := labels["datareplicator/replicated"]
-		if replicatedExist && alreadyReplicated == "true" {
-			return ctrl.Result{}, nil
-		}
 		// Make List of Namespaces, Remove Duplicates
 		namespaces := strings.Split(val, ",")
 		slices.Sort(namespaces)
@@ -122,18 +160,46 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				copy_cm.Annotations["datareplicator/sourcenamespace"] = currentnamespace
 				delete(copy_cm.Annotations, "datareplicator/replicate-to")
 				delete(copy_cm.Annotations, "datareplicator/createnamespace")
-				// Modifying labels for Original
-				cm.Annotations["datareplicator/replicated"] = "true"
-				// Launch New and Update
-				err = r.Update(ctx, cm)
-				if err != nil {
-					logger.Error(err, err.Error())
-					return ctrl.Result{}, err
+				// Update Current or Add New
+				find_cm := &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      cm.Name,
+						Namespace: n,
+					},
 				}
-				err = r.Create(ctx, copy_cm)
+				err = r.Get(ctx, types.NamespacedName{
+					Namespace: n,
+					Name:      cm.Name,
+				}, find_cm)
 				if err != nil {
-					logger.Error(err, err.Error())
-					return ctrl.Result{}, err
+					if errors.IsNotFound(err) {
+						logger.Info("Creating new Configmap")
+						// Modifying labels for Original
+						cm.Annotations["datareplicator/replicated"] = "true"
+						// Launch New and Update [Add Finalizer]
+						cm.Finalizers = append(cm.Finalizers, finalizerMessage)
+						err = r.Update(ctx, cm)
+						if err != nil {
+							logger.Error(err, err.Error())
+							return ctrl.Result{}, err
+						}
+						err = r.Create(ctx, copy_cm)
+						if err != nil {
+							logger.Error(err, err.Error())
+							return ctrl.Result{}, err
+						}
+					} else {
+						logger.Error(err, err.Error())
+						return ctrl.Result{}, err
+					}
+				} else {
+					logger.Info("Modifying Old Configmap")
+					find_cm.Data = cm.Data
+					err = r.Update(ctx, find_cm)
+					if err != nil {
+						logger.Error(err, err.Error())
+						return ctrl.Result{}, err
+					}
 				}
 			}
 		}

@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: maniraja1122/datareplicator
-  newTag: "1.1"
+  newTag: "1.2"

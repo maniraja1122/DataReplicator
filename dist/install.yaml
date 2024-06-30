@@ -186,7 +186,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: maniraja1122/datareplicator:1.1
+        image: maniraja1122/datareplicator:1.2
         livenessProbe:
           httpGet:
             path: /healthz

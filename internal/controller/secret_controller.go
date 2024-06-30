@@ -37,6 +37,21 @@ type SecretReconciler struct {
 }
 
 // Additional Functions
+func (r *SecretReconciler) deleteSecret(ctx context.Context, name, namespace string) error {
+	// Define the Secret to delete
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}
+	// Delete the Secret
+	if err := r.Delete(ctx, secret); err != nil {
+		return err // Handle the error appropriately
+	}
+
+	return nil
+}
 func (r *SecretReconciler) NamespaceExists(ctx context.Context, namespaceName string) (bool, error) {
 	ns := &corev1.Namespace{}
 	err := r.Get(ctx, types.NamespacedName{Name: namespaceName}, ns)
@@ -74,14 +89,35 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		logger.Error(err, err.Error())
 		return ctrl.Result{}, err
 	}
+	// Checking Potential Deletion
+	if secret.DeletionTimestamp != nil {
+		duplicated_ns_list, list_exist := secret.Annotations["datareplicator/replicate-to"]
+		if list_exist {
+			ns_list := strings.Split(duplicated_ns_list, ",")
+			for _, n := range ns_list {
+				err := r.deleteSecret(ctx, secret.Name, n)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+		}
+		secret.Finalizers = slices.DeleteFunc(secret.Finalizers, func(v string) bool {
+			if v == finalizerMessage {
+				return true
+			} else {
+				return false
+			}
+		})
+		err := r.Update(ctx, secret)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	// Duplicating....
 	labels := secret.Annotations
 	currentnamespace := secret.Namespace
 	val, exist := labels["datareplicator/replicate-to"]
 	if exist {
-		alreadyReplicated, replicatedExist := labels["datareplicator/replicated"]
-		if replicatedExist && alreadyReplicated == "true" {
-			return ctrl.Result{}, nil
-		}
 		// Make List of Namespaces, Remove Duplicates
 		namespaces := strings.Split(val, ",")
 		slices.Sort(namespaces)
@@ -111,28 +147,56 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					}
 				}
 				// Proceed with Creation of Duplicate
-				copy_cm := secret.DeepCopy()
+				copy_secret := secret.DeepCopy()
 				// Remove Identity Field
-				copy_cm.UID = ""
-				copy_cm.ResourceVersion = ""
+				copy_secret.UID = ""
+				copy_secret.ResourceVersion = ""
 				// Change Namespace
-				copy_cm.Namespace = n
+				copy_secret.Namespace = n
 				// Modifying labels for duplicate
-				copy_cm.Annotations["datareplicator/sourcenamespace"] = currentnamespace
-				delete(copy_cm.Annotations, "datareplicator/replicate-to")
-				delete(copy_cm.Annotations, "datareplicator/createnamespace")
-				// Modifying labels for Original
-				secret.Annotations["datareplicator/replicated"] = "true"
-				// Launch New and Update
-				err = r.Update(ctx, secret)
-				if err != nil {
-					logger.Error(err, err.Error())
-					return ctrl.Result{}, err
+				copy_secret.Annotations["datareplicator/sourcenamespace"] = currentnamespace
+				delete(copy_secret.Annotations, "datareplicator/replicate-to")
+				delete(copy_secret.Annotations, "datareplicator/createnamespace")
+				// Update Current or Add New
+				find_secret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      secret.Name,
+						Namespace: n,
+					},
 				}
-				err = r.Create(ctx, copy_cm)
+				err = r.Get(ctx, types.NamespacedName{
+					Namespace: n,
+					Name:      secret.Name,
+				}, find_secret)
 				if err != nil {
-					logger.Error(err, err.Error())
-					return ctrl.Result{}, err
+					if errors.IsNotFound(err) {
+						logger.Info("Creating new Secret")
+						// Modifying labels for Original
+						secret.Annotations["datareplicator/replicated"] = "true"
+						// Launch New and Update [Add Finalizer]
+						secret.Finalizers = append(secret.Finalizers, finalizerMessage)
+						err = r.Update(ctx, secret)
+						if err != nil {
+							logger.Error(err, err.Error())
+							return ctrl.Result{}, err
+						}
+						err = r.Create(ctx, copy_secret)
+						if err != nil {
+							logger.Error(err, err.Error())
+							return ctrl.Result{}, err
+						}
+					} else {
+						logger.Error(err, err.Error())
+						return ctrl.Result{}, err
+					}
+				} else {
+					logger.Info("Modifying Old Secret")
+					find_secret.Data = secret.Data
+					err = r.Update(ctx, find_secret)
+					if err != nil {
+						logger.Error(err, err.Error())
+						return ctrl.Result{}, err
+					}
 				}
 			}
 		}
